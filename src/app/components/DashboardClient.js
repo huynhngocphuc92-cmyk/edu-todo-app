@@ -118,11 +118,73 @@ export default function DashboardClient({ userId }) {
     setLoading(false);
   };
 
-  // Lấy dữ liệu từ Supabase khi mở web
+  // Lấy dữ liệu từ Supabase khi mở web và setup real-time subscription
   useEffect(() => {
-    if (userId) {
-      fetchTasks();
-    }
+    if (!userId) return;
+
+    // Fetch tasks ban đầu
+    fetchTasks();
+
+    // Setup real-time subscription để lắng nghe thay đổi từ Supabase
+    const channel = supabase
+      .channel('tasks-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${userId}`, // Chỉ lắng nghe tasks của user hiện tại
+        },
+        (payload) => {
+          // Khi có task mới được thêm vào
+          setTasks((prevTasks) => {
+            // Kiểm tra xem task đã tồn tại chưa (tránh duplicate)
+            const exists = prevTasks.some((task) => task.id === payload.new.id);
+            if (exists) return prevTasks;
+            // Thêm task mới vào đầu danh sách (vì sort theo created_at desc)
+            return [payload.new, ...prevTasks];
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${userId}`, // Chỉ lắng nghe tasks của user hiện tại
+        },
+        (payload) => {
+          // Khi task được cập nhật
+          setTasks((prevTasks) =>
+            prevTasks.map((task) =>
+              task.id === payload.new.id ? payload.new : task
+            )
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${userId}`, // Chỉ lắng nghe tasks của user hiện tại
+        },
+        (payload) => {
+          // Khi task bị xóa
+          setTasks((prevTasks) =>
+            prevTasks.filter((task) => task.id !== payload.old.id)
+          );
+        }
+      )
+      .subscribe();
+
+    // Cleanup: unsubscribe khi component unmount
+    return () => {
+      supabase.removeChannel(channel);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
