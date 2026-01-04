@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { useRouter } from 'next/navigation';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import { Toaster, toast } from 'react-hot-toast';
 
 export default function DashboardPage() {
   const [tasks, setTasks] = useState([]);
@@ -13,10 +14,11 @@ export default function DashboardPage() {
   const [user, setUser] = useState(null);
   const [isBrowser, setIsBrowser] = useState(false);
 
-  // --- DARK MODE & UPLOAD STATE ---
+  // --- DARK MODE, UPLOAD, SEARCH STATE ---
   const [darkMode, setDarkMode] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null); // File ảnh đang chọn
-  const [isUploading, setIsUploading] = useState(false);  // Trạng thái đang upload
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState(''); // 🔍 State tìm kiếm mới
 
   // --- MODAL STATES ---
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -85,56 +87,64 @@ export default function DashboardPage() {
     const newStatus = destination.droppableId;
     const updatedTasks = tasks.map(t => t.id === draggableId ? { ...t, status: newStatus } : t);
     setTasks(updatedTasks);
-    await supabase.from('tasks').update({ status: newStatus }).eq('id', draggableId);
+    
+    const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', draggableId);
+    if (!error) {
+        const statusText = newStatus === 'todo' ? 'Cần làm' : newStatus === 'in_progress' ? 'Đang làm' : 'Đã xong';
+        toast.success(`Đã chuyển sang: ${statusText}`, { icon: '🔄' });
+    } else {
+        toast.error('Lỗi cập nhật trạng thái!');
+    }
   };
 
-  // --- 4. CRUD ACTIONS (CÓ UPLOAD ẢNH) ---
+  // --- 4. CRUD ACTIONS ---
   const addTodo = async () => {
-    if (!newTask || !user) return;
-
+    if (!newTask || !user) {
+        toast.error('Vui lòng nhập tên nhiệm vụ!');
+        return;
+    }
     let imageUrl = null;
-
-    // Xử lý Upload ảnh nếu có
     if (selectedFile) {
         setIsUploading(true);
-        const fileName = `${Date.now()}-${selectedFile.name}`; // Tên file không trùng
-        const { data, error } = await supabase.storage
-            .from('task-images')
-            .upload(fileName, selectedFile);
-            
+        const loadingToast = toast.loading('Đang upload ảnh...');
+        const fileName = `${Date.now()}-${selectedFile.name}`;
+        const { data, error } = await supabase.storage.from('task-images').upload(fileName, selectedFile); 
         if (data) {
-            // Lấy link ảnh công khai
-            const { data: publicUrlData } = supabase.storage
-                .from('task-images')
-                .getPublicUrl(fileName);
+            const { data: publicUrlData } = supabase.storage.from('task-images').getPublicUrl(fileName);
             imageUrl = publicUrlData.publicUrl;
+            toast.dismiss(loadingToast);
+            toast.success('Upload ảnh thành công!');
+        } else {
+            toast.dismiss(loadingToast);
+            toast.error('Lỗi upload ảnh!');
+            setIsUploading(false);
+            return;
         }
         setIsUploading(false);
     }
-
-    // Lưu vào Database
     const { error } = await supabase.from('tasks').insert([{
         title: newTask,
         start_date: startDate,
         deadline: deadline,
         status: 'todo',
         user_id: user.id,
-        image_url: imageUrl // Lưu link ảnh vào cột mới
+        image_url: imageUrl
     }]);
-
     if (!error) { 
         setNewTask(''); setStartDate(''); setDeadline(''); setSelectedFile(null); 
-    }
+        toast.success('Thêm nhiệm vụ mới thành công! 🚀');
+    } else { toast.error('Có lỗi xảy ra khi lưu!'); }
   };
 
   const handleDeleteClick = (id) => { setTaskToDelete(id); setIsDeleteModalOpen(true); };
   const confirmDelete = async () => {
       if (taskToDelete) {
-        await supabase.from('tasks').delete().match({ id: taskToDelete });
+        const { error } = await supabase.from('tasks').delete().match({ id: taskToDelete });
+        if (!error) toast.success('Đã xóa nhiệm vụ! 🗑️');
+        else toast.error('Xóa thất bại!');
         setIsDeleteModalOpen(false); setTaskToDelete(null);
       }
   };
-
   const handleEditClick = (task) => { setEditingTask(task); setIsEditModalOpen(true); };
   const saveEdit = async () => {
       if (editingTask) {
@@ -143,7 +153,10 @@ export default function DashboardPage() {
               start_date: editingTask.start_date,
               deadline: editingTask.deadline
           }).eq('id', editingTask.id);
-          if (!error) { setIsEditModalOpen(false); setEditingTask(null); }
+          if (!error) { 
+              setIsEditModalOpen(false); setEditingTask(null); 
+              toast.success('Cập nhật thành công! 📝');
+          } else { toast.error('Lỗi khi cập nhật!'); }
       }
   };
 
@@ -154,22 +167,29 @@ export default function DashboardPage() {
   const bgInput = darkMode ? 'bg-slate-700 border-slate-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-800';
   const textSub = darkMode ? 'text-slate-400' : 'text-slate-500';
 
-  // --- UI RENDER ---
   if (loading || !isBrowser) return <div className="h-screen flex items-center justify-center bg-slate-900 text-white">Đang tải...</div>;
 
+  // --- LOGIC LỌC TÌM KIẾM (MỚI) ---
+  // Lọc danh sách tasks dựa trên từ khóa tìm kiếm trước khi đưa vào các cột
+  const filteredTasks = tasks.filter(t => 
+      t.title.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const columns = {
-    todo: { title: 'Cần làm', bg: darkMode ? 'bg-slate-800/50' : 'bg-slate-100/50', items: tasks.filter(t => t.status === 'todo') },
-    in_progress: { title: 'Đang làm', bg: darkMode ? 'bg-yellow-900/20' : 'bg-yellow-50/50', items: tasks.filter(t => t.status === 'in_progress') },
-    done: { title: 'Đã xong', bg: darkMode ? 'bg-green-900/20' : 'bg-green-50/50', items: tasks.filter(t => t.status === 'done') }
+    todo: { title: 'Cần làm', bg: darkMode ? 'bg-slate-800/50' : 'bg-slate-100/50', items: filteredTasks.filter(t => t.status === 'todo') },
+    in_progress: { title: 'Đang làm', bg: darkMode ? 'bg-yellow-900/20' : 'bg-yellow-50/50', items: filteredTasks.filter(t => t.status === 'in_progress') },
+    done: { title: 'Đã xong', bg: darkMode ? 'bg-green-900/20' : 'bg-green-50/50', items: filteredTasks.filter(t => t.status === 'done') }
   };
 
   return (
     <div className={`min-h-screen py-8 px-4 font-sans transition-colors duration-300 ${bgMain} ${textMain}`}>
+      <Toaster position="top-center" reverseOrder={false} />
+
       <div className="max-w-6xl mx-auto">
         
         {/* HEADER */}
-        <div className={`flex justify-between items-center mb-8 p-5 rounded-2xl shadow-sm border ${bgCard}`}>
-            <div className="flex items-center gap-4">
+        <div className={`flex flex-col md:flex-row justify-between items-center mb-8 p-5 rounded-2xl shadow-sm border gap-4 ${bgCard}`}>
+            <div className="flex items-center gap-4 w-full md:w-auto">
                 <div className="h-14 w-14 rounded-full border-2 border-indigo-500/30 overflow-hidden p-0.5">
                     <img src={`https://api.dicebear.com/9.x/notionists/svg?seed=${user?.email}`} alt="Avatar" className="h-full w-full object-cover rounded-full bg-slate-200" />
                 </div>
@@ -179,18 +199,32 @@ export default function DashboardPage() {
                 </div>
             </div>
             
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                 {/* Ô TÌM KIẾM (MỚI) */}
+                <div className={`flex items-center px-3 py-2.5 rounded-xl border ${bgInput} w-full md:w-64`}>
+                    <span className="mr-2 opacity-50">🔍</span>
+                    <input 
+                        type="text" 
+                        placeholder="Tìm kiếm..." 
+                        className="bg-transparent outline-none w-full text-sm"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                    {searchQuery && (
+                        <button onClick={() => setSearchQuery('')} className="text-xs opacity-50 hover:opacity-100">✕</button>
+                    )}
+                </div>
+
                 <button onClick={() => setDarkMode(!darkMode)} className={`p-2.5 rounded-xl transition-all ${darkMode ? 'bg-yellow-500/20 text-yellow-400' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{darkMode ? '☀️' : '🌙'}</button>
-                <button onClick={async () => { await supabase.auth.signOut(); router.push('/login'); }} className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${darkMode ? 'bg-slate-700 hover:bg-red-900/30 text-slate-300 hover:text-red-400' : 'bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600'}`}>Đăng xuất</button>
+                <button onClick={async () => { await supabase.auth.signOut(); router.push('/login'); }} className={`px-3 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 whitespace-nowrap ${darkMode ? 'bg-slate-700 hover:bg-red-900/30 text-slate-300 hover:text-red-400' : 'bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600'}`}>Đăng xuất</button>
             </div>
         </div>
 
-        {/* INPUT FORM (CÓ UPLOAD ẢNH) */}
+        {/* INPUT FORM */}
         <div className={`p-2 rounded-2xl shadow-lg border mb-8 flex flex-col md:flex-row gap-2 ${bgCard} ${darkMode ? 'border-indigo-900/50 shadow-indigo-900/20' : 'border-indigo-50'}`}>
             <input type="text" placeholder="✨ Nhập nhiệm vụ mới..." className={`flex-1 p-3 bg-transparent outline-none text-lg font-medium pl-4 placeholder:text-slate-400 ${darkMode ? 'text-white' : 'text-slate-800'}`} value={newTask} onChange={(e) => setNewTask(e.target.value)} />
             
             <div className="flex gap-2 p-1 items-center">
-                {/* NÚT CHỌN ẢNH */}
                 <label className={`cursor-pointer p-3 rounded-xl hover:bg-slate-200 transition flex items-center justify-center relative ${selectedFile ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}>
                     <input type="file" accept="image/*" className="hidden" onChange={(e) => setSelectedFile(e.target.files[0])} />
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -229,7 +263,6 @@ export default function DashboardPage() {
                                             {(provided) => (
                                                 <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps} className={`p-4 rounded-xl shadow-sm border hover:shadow-md transition-all group relative cursor-grab active:cursor-grabbing ${bgCard}`}>
                                                     
-                                                    {/* HIỂN THỊ ẢNH NẾU CÓ */}
                                                     {task.image_url && (
                                                         <div className="mb-3 rounded-lg overflow-hidden h-32 w-full bg-slate-100 relative group/img">
                                                             <img src={task.image_url} alt="Task attachment" className="h-full w-full object-cover" />
@@ -239,7 +272,10 @@ export default function DashboardPage() {
                                                         </div>
                                                     )}
 
-                                                    <h3 className={`font-semibold mb-2 leading-tight ${textMain}`}>{task.title}</h3>
+                                                    <h3 className={`font-semibold mb-2 leading-tight ${textMain}`}>
+                                                        {/* Highlight từ khóa tìm kiếm (Optional - Basic Logic) */}
+                                                        {task.title}
+                                                    </h3>
                                                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide">
                                                         {task.start_date && <span className={`px-2 py-1 rounded ${darkMode ? 'bg-slate-700 text-slate-400' : 'bg-slate-50 text-slate-400'}`}>Start: {task.start_date}</span>}
                                                         {task.deadline && <span className={`px-2 py-1 rounded ${darkMode ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-50 text-orange-500'}`}>Due: {task.deadline}</span>}
@@ -260,37 +296,35 @@ export default function DashboardPage() {
                 ))}
             </div>
         </DragDropContext>
-
-      </div>
-
-      {/* POPUP XÓA */}
-      {isDeleteModalOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className={`rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center ${darkMode ? 'bg-slate-800' : 'bg-white'}`}>
-                <div className="w-12 h-12 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></div>
-                <h3 className={`text-lg font-bold mb-1 ${textMain}`}>Xóa nhiệm vụ?</h3>
-                <p className={`text-sm mb-6 ${textSub}`}>Bạn có chắc muốn xóa không?</p>
-                <div className="flex gap-3"><button onClick={() => setIsDeleteModalOpen(false)} className={`flex-1 py-2 rounded-xl font-bold ${darkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>Hủy</button><button onClick={confirmDelete} className="flex-1 py-2 bg-red-500 text-white rounded-xl font-bold shadow-lg shadow-red-200">Xóa luôn</button></div>
-            </div>
-        </div>
-      )}
-
-      {/* POPUP SỬA */}
-      {isEditModalOpen && editingTask && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className={`rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200 ${darkMode ? 'bg-slate-800' : 'bg-white'}`}>
-                <h3 className={`text-lg font-bold mb-4 ${textMain}`}>✏️ Chỉnh sửa</h3>
-                <div className="space-y-4">
-                    <input type="text" className={`w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 ${bgInput}`} value={editingTask.title} onChange={(e) => setEditingTask({...editingTask, title: e.target.value})} />
-                    <div className="flex gap-3">
-                        <input type="date" className={`flex-1 p-3 border rounded-xl outline-none ${bgInput}`} value={editingTask.start_date || ''} onChange={(e) => setEditingTask({...editingTask, start_date: e.target.value})} />
-                        <input type="date" className={`flex-1 p-3 border rounded-xl outline-none ${bgInput}`} value={editingTask.deadline || ''} onChange={(e) => setEditingTask({...editingTask, deadline: e.target.value})} />
-                    </div>
+        
+        {/* MODAL STATES - KEEP AS IS */}
+        {isDeleteModalOpen && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                <div className={`rounded-2xl shadow-2xl max-w-sm w-full p-6 text-center ${darkMode ? 'bg-slate-800' : 'bg-white'}`}>
+                    <div className="w-12 h-12 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></div>
+                    <h3 className={`text-lg font-bold mb-1 ${textMain}`}>Xóa nhiệm vụ?</h3>
+                    <p className={`text-sm mb-6 ${textSub}`}>Bạn có chắc muốn xóa không?</p>
+                    <div className="flex gap-3"><button onClick={() => setIsDeleteModalOpen(false)} className={`flex-1 py-2 rounded-xl font-bold ${darkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>Hủy</button><button onClick={confirmDelete} className="flex-1 py-2 bg-red-500 text-white rounded-xl font-bold shadow-lg shadow-red-200">Xóa luôn</button></div>
                 </div>
-                <div className="flex gap-3 w-full mt-6"><button onClick={() => setIsEditModalOpen(false)} className={`flex-1 py-2 font-bold rounded-xl ${darkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>Hủy</button><button onClick={saveEdit} className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200">Lưu</button></div>
             </div>
-        </div>
-      )}
+        )}
+
+        {isEditModalOpen && editingTask && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                <div className={`rounded-2xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200 ${darkMode ? 'bg-slate-800' : 'bg-white'}`}>
+                    <h3 className={`text-lg font-bold mb-4 ${textMain}`}>✏️ Chỉnh sửa</h3>
+                    <div className="space-y-4">
+                        <input type="text" className={`w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 ${bgInput}`} value={editingTask.title} onChange={(e) => setEditingTask({...editingTask, title: e.target.value})} />
+                        <div className="flex gap-3">
+                            <input type="date" className={`flex-1 p-3 border rounded-xl outline-none ${bgInput}`} value={editingTask.start_date || ''} onChange={(e) => setEditingTask({...editingTask, start_date: e.target.value})} />
+                            <input type="date" className={`flex-1 p-3 border rounded-xl outline-none ${bgInput}`} value={editingTask.deadline || ''} onChange={(e) => setEditingTask({...editingTask, deadline: e.target.value})} />
+                        </div>
+                    </div>
+                    <div className="flex gap-3 w-full mt-6"><button onClick={() => setIsEditModalOpen(false)} className={`flex-1 py-2 font-bold rounded-xl ${darkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>Hủy</button><button onClick={saveEdit} className="flex-1 py-2 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200">Lưu</button></div>
+                </div>
+            </div>
+        )}
+      </div>
     </div>
   );
 }
