@@ -13,8 +13,10 @@ export default function DashboardPage() {
   const [user, setUser] = useState(null);
   const [isBrowser, setIsBrowser] = useState(false);
 
-  // --- DARK MODE STATE ---
+  // --- DARK MODE & UPLOAD STATE ---
   const [darkMode, setDarkMode] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null); // File ảnh đang chọn
+  const [isUploading, setIsUploading] = useState(false);  // Trạng thái đang upload
 
   // --- MODAL STATES ---
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -86,17 +88,43 @@ export default function DashboardPage() {
     await supabase.from('tasks').update({ status: newStatus }).eq('id', draggableId);
   };
 
-  // --- 4. CRUD ACTIONS ---
+  // --- 4. CRUD ACTIONS (CÓ UPLOAD ẢNH) ---
   const addTodo = async () => {
     if (!newTask || !user) return;
+
+    let imageUrl = null;
+
+    // Xử lý Upload ảnh nếu có
+    if (selectedFile) {
+        setIsUploading(true);
+        const fileName = `${Date.now()}-${selectedFile.name}`; // Tên file không trùng
+        const { data, error } = await supabase.storage
+            .from('task-images')
+            .upload(fileName, selectedFile);
+            
+        if (data) {
+            // Lấy link ảnh công khai
+            const { data: publicUrlData } = supabase.storage
+                .from('task-images')
+                .getPublicUrl(fileName);
+            imageUrl = publicUrlData.publicUrl;
+        }
+        setIsUploading(false);
+    }
+
+    // Lưu vào Database
     const { error } = await supabase.from('tasks').insert([{
         title: newTask,
         start_date: startDate,
         deadline: deadline,
         status: 'todo',
-        user_id: user.id
+        user_id: user.id,
+        image_url: imageUrl // Lưu link ảnh vào cột mới
     }]);
-    if (!error) { setNewTask(''); setStartDate(''); setDeadline(''); }
+
+    if (!error) { 
+        setNewTask(''); setStartDate(''); setDeadline(''); setSelectedFile(null); 
+    }
   };
 
   const handleDeleteClick = (id) => { setTaskToDelete(id); setIsDeleteModalOpen(true); };
@@ -119,7 +147,7 @@ export default function DashboardPage() {
       }
   };
 
-  // --- HELPER CLASSES FOR DARK MODE ---
+  // --- HELPER CLASSES ---
   const bgMain = darkMode ? 'bg-slate-900' : 'bg-slate-50';
   const textMain = darkMode ? 'text-slate-100' : 'text-slate-800';
   const bgCard = darkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100';
@@ -152,46 +180,35 @@ export default function DashboardPage() {
             </div>
             
             <div className="flex items-center gap-3">
-                {/* NÚT DARK MODE */}
-                <button 
-                    onClick={() => setDarkMode(!darkMode)}
-                    className={`p-2.5 rounded-xl transition-all ${darkMode ? 'bg-yellow-500/20 text-yellow-400' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                >
-                    {darkMode ? '☀️' : '🌙'}
-                </button>
-
-                <button 
-                    onClick={async () => { await supabase.auth.signOut(); router.push('/login'); }}
-                    className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${darkMode ? 'bg-slate-700 hover:bg-red-900/30 text-slate-300 hover:text-red-400' : 'bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600'}`}
-                >
-                    Đăng xuất
-                </button>
+                <button onClick={() => setDarkMode(!darkMode)} className={`p-2.5 rounded-xl transition-all ${darkMode ? 'bg-yellow-500/20 text-yellow-400' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{darkMode ? '☀️' : '🌙'}</button>
+                <button onClick={async () => { await supabase.auth.signOut(); router.push('/login'); }} className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${darkMode ? 'bg-slate-700 hover:bg-red-900/30 text-slate-300 hover:text-red-400' : 'bg-slate-100 hover:bg-red-50 text-slate-600 hover:text-red-600'}`}>Đăng xuất</button>
             </div>
         </div>
 
-        {/* STATS */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-            <div className={`p-5 rounded-2xl shadow-sm border flex justify-between items-center ${bgCard}`}>
-                <div><p className={`text-xs font-bold uppercase tracking-wider ${textSub}`}>Tổng nhiệm vụ</p><p className="text-3xl font-extrabold mt-1">{tasks.length}</p></div>
-                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${darkMode ? 'bg-indigo-900/50 text-indigo-400' : 'bg-indigo-50 text-indigo-600'}`}>∑</div>
-            </div>
-            <div className={`p-5 rounded-2xl shadow-sm border flex justify-between items-center ${bgCard}`}>
-                <div><p className={`text-xs font-bold uppercase tracking-wider ${textSub}`}>Đang làm</p><p className="text-3xl font-extrabold text-yellow-500 mt-1">{tasks.filter(t => t.status === 'in_progress').length}</p></div>
-                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${darkMode ? 'bg-yellow-900/30 text-yellow-500' : 'bg-yellow-50 text-yellow-600'}`}>⚡</div>
-            </div>
-            <div className={`p-5 rounded-2xl shadow-sm border flex justify-between items-center ${bgCard}`}>
-                <div><p className={`text-xs font-bold uppercase tracking-wider ${textSub}`}>Đã xong</p><p className="text-3xl font-extrabold text-green-500 mt-1">{tasks.filter(t => t.status === 'done').length}</p></div>
-                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${darkMode ? 'bg-green-900/30 text-green-500' : 'bg-green-50 text-green-600'}`}>✓</div>
-            </div>
-        </div>
-
-        {/* INPUT FORM */}
+        {/* INPUT FORM (CÓ UPLOAD ẢNH) */}
         <div className={`p-2 rounded-2xl shadow-lg border mb-8 flex flex-col md:flex-row gap-2 ${bgCard} ${darkMode ? 'border-indigo-900/50 shadow-indigo-900/20' : 'border-indigo-50'}`}>
             <input type="text" placeholder="✨ Nhập nhiệm vụ mới..." className={`flex-1 p-3 bg-transparent outline-none text-lg font-medium pl-4 placeholder:text-slate-400 ${darkMode ? 'text-white' : 'text-slate-800'}`} value={newTask} onChange={(e) => setNewTask(e.target.value)} />
-            <div className="flex gap-2 p-1">
+            
+            <div className="flex gap-2 p-1 items-center">
+                {/* NÚT CHỌN ẢNH */}
+                <label className={`cursor-pointer p-3 rounded-xl hover:bg-slate-200 transition flex items-center justify-center relative ${selectedFile ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}>
+                    <input type="file" accept="image/*" className="hidden" onChange={(e) => setSelectedFile(e.target.files[0])} />
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                    </svg>
+                    {selectedFile && <div className="absolute -top-1 -right-1 h-3 w-3 bg-red-500 rounded-full border-2 border-white"></div>}
+                </label>
+
                 <input type="date" className={`p-2 rounded-xl border-none outline-none text-sm font-medium cursor-pointer transition ${darkMode ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
                 <input type="date" className={`p-2 rounded-xl border-none outline-none text-sm font-medium cursor-pointer transition ${darkMode ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`} value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-                <button onClick={addTodo} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 rounded-xl font-bold transition shadow-md active:scale-95">+</button>
+                
+                <button 
+                    onClick={addTodo} 
+                    disabled={isUploading}
+                    className={`bg-indigo-600 hover:bg-indigo-700 text-white px-6 rounded-xl font-bold transition shadow-md active:scale-95 flex items-center gap-2 ${isUploading ? 'opacity-70 cursor-not-allowed' : ''}`}
+                >
+                    {isUploading ? <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div> : '+'}
+                </button>
             </div>
         </div>
 
@@ -211,6 +228,17 @@ export default function DashboardPage() {
                                         <Draggable key={task.id} draggableId={task.id} index={index}>
                                             {(provided) => (
                                                 <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps} className={`p-4 rounded-xl shadow-sm border hover:shadow-md transition-all group relative cursor-grab active:cursor-grabbing ${bgCard}`}>
+                                                    
+                                                    {/* HIỂN THỊ ẢNH NẾU CÓ */}
+                                                    {task.image_url && (
+                                                        <div className="mb-3 rounded-lg overflow-hidden h-32 w-full bg-slate-100 relative group/img">
+                                                            <img src={task.image_url} alt="Task attachment" className="h-full w-full object-cover" />
+                                                            <a href={task.image_url} target="_blank" rel="noreferrer" className="absolute inset-0 bg-black/30 opacity-0 group-hover/img:opacity-100 flex items-center justify-center text-white transition-opacity">
+                                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                                            </a>
+                                                        </div>
+                                                    )}
+
                                                     <h3 className={`font-semibold mb-2 leading-tight ${textMain}`}>{task.title}</h3>
                                                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide">
                                                         {task.start_date && <span className={`px-2 py-1 rounded ${darkMode ? 'bg-slate-700 text-slate-400' : 'bg-slate-50 text-slate-400'}`}>Start: {task.start_date}</span>}
